@@ -20,6 +20,10 @@
   #login { max-width:340px; margin:18vh auto; text-align:center; padding:0 20px; }
   #login input { width:100%; font:inherit; font-size:1.3rem; padding:12px; margin:14px 0; border:1.5px solid var(--gold); border-radius:12px; text-align:center; background:#fff; }
   #msg { color:#a2402f; min-height:1.4em; }
+  #splash { text-align:center; margin:30vh auto 0; font-size:1.3rem; opacity:.85; }
+  #splash .names { margin-bottom:8px; }
+  #note { text-align:center; min-height:1.5em; margin:-6px 0 8px; font-size:1.1rem; opacity:.85; }
+  #note.err { color:#a2402f; }
   #grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:6px; padding:6px; max-width:1100px; margin:0 auto; }
   #grid .cell { aspect-ratio:1; background:#e8dfd0; overflow:hidden; cursor:pointer; border-radius:4px; }
   #grid img { width:100%; height:100%; object-fit:cover; display:block; }
@@ -44,7 +48,9 @@
 </head>
 <body>
 
-<div id="login">
+<div id="splash"><div class="names" id="splashNames"></div><div>Cargando fotos…</div></div>
+
+<div id="login" style="display:none">
   <div class="names" id="loginNames"></div>
   <p>Escribe el PIN para ver las fotos</p>
   <input id="pin" type="password" autocomplete="off" placeholder="PIN">
@@ -61,6 +67,7 @@
     <button class="btn" id="refresh">Actualizar</button>
     <a class="btn" id="toShow" href="#">Pantalla en vivo</a>
   </div>
+  <div id="note"></div>
   <div id="grid"></div>
 </div>
 
@@ -97,6 +104,7 @@ let PIN = '';
 try { PIN = sessionStorage.getItem('pin') || ''; } catch (e) {}
 
 $('loginNames').textContent = CONFIG.names;
+$('splashNames').textContent = CONFIG.names;
 $('names').textContent = CONFIG.names;
 $('title').textContent = CONFIG.names;
 $('toShow').href = '?modo=pantalla';
@@ -112,7 +120,7 @@ async function api(params) {
       last = new Error(out.error || 'Error');
       if (out.error === 'PIN incorrecto') throw last;
     } catch (e) { last = e; if (e.message === 'PIN incorrecto') throw e; }
-    await new Promise(r => setTimeout(r, 1200 * (i + 1)));
+    if (i < 3) await new Promise(r => setTimeout(r, 1200 * (i + 1)));
   }
   throw last;
 }
@@ -122,52 +130,76 @@ function dataToUrl(out) {
   return URL.createObjectURL(new Blob([arr], { type: out.mime || 'image/jpeg' }));
 }
 
+function showLogin() { $('splash').style.display = 'none'; $('login').style.display = 'block'; }
 async function login() {
   PIN = $('pin').value.trim() || PIN;
   $('msg').textContent = '';
+  const btn = $('enter'); btn.disabled = true; btn.textContent = 'Entrando…';
   try {
     const out = await api({ action: 'list' });
     try { sessionStorage.setItem('pin', PIN); } catch (e) {}
-    $('login').style.display = 'none';
+    $('login').style.display = 'none'; $('splash').style.display = 'none';
     isShow ? startShow(out.files) : startGallery(out.files);
   } catch (e) {
+    showLogin();
+    if (e.message === 'PIN incorrecto') { PIN = ''; try { sessionStorage.removeItem('pin'); } catch (e2) {} }
     $('msg').textContent = e.message === 'PIN incorrecto' ? 'PIN incorrecto' : 'No se pudo conectar. Inténtalo de nuevo.';
   }
+  btn.disabled = false; btn.textContent = 'Entrar';
 }
-$('enter').onclick = login;
+$('enter').onclick = () => login();
 $('pin').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
-if (PIN) login();
+if (PIN) login(); else showLogin();
 
 /* ---------- Galería ---------- */
 const thumbs = new Map();   // id -> url
 const rendered = new Set();
 let queue = [], active = 0;
 
+const failed = [];
 function startGallery(files) {
   $('app').style.display = 'block';
   renderGrid(files);
-  $('refresh').onclick = async () => { try { renderGrid((await api({ action: 'list' })).files); } catch (e) {} };
+  let noteT;
+  function note(msg, isErr) { const n = $('note'); n.textContent = msg; n.className = isErr ? 'err' : ''; clearTimeout(noteT); noteT = setTimeout(() => { n.textContent = ''; }, 5000); }
+  $('refresh').onclick = async () => {
+    const b = $('refresh'); b.disabled = true; b.textContent = 'Actualizando…';
+    try {
+      const out = await api({ action: 'list' });
+      const n = renderGrid(out.files);
+      const r = retryFailed();
+      note(n > 0 ? (n === 1 ? '1 foto nueva' : n + ' fotos nuevas') : (r > 0 ? 'Reintentando las fotos que no cargaron…' : 'Ya tienes todas las fotos'));
+    } catch (e) { note('No se pudo actualizar. Inténtalo de nuevo.', true); }
+    b.disabled = false; b.textContent = 'Actualizar';
+  };
 }
 function renderGrid(files) {
   $('count').textContent = files.length === 1 ? '1 foto' : files.length + ' fotos';
-  const grid = $('grid');
-  files.forEach(f => {
+  const fresh = [], jobs = [];
+  files.forEach(f => {   // la lista viene de más nueva a más vieja
     if (rendered.has(f.id)) return;
     rendered.add(f.id);
     const cell = document.createElement('div'); cell.className = 'cell'; cell.dataset.id = f.id;
     const img = document.createElement('img'); cell.appendChild(img);
     cell.onclick = () => openLightbox(f.id);
-    grid.appendChild(cell);   // las nuevas se agregan al final; el orden inicial ya es de más nueva a más vieja
-    queue.push({ id: f.id, img });
+    fresh.push(cell); jobs.push({ id: f.id, img });
   });
+  $('grid').prepend(...fresh);       // las nuevas van al principio
+  queue = jobs.concat(queue);
   pump();
+  return fresh.length;
+}
+function retryFailed() {
+  const n = failed.length;
+  if (n) { queue = queue.concat(failed.splice(0)); pump(); }
+  return n;
 }
 function pump() {
   while (active < 2 && queue.length) {
     const job = queue.shift(); active++;
     api({ action: 'img', id: job.id, size: 'thumb' })
       .then(out => { const u = dataToUrl(out); thumbs.set(job.id, u); job.img.src = u; })
-      .catch(() => {})
+      .catch(() => { failed.push(job); })
       .finally(() => { active--; pump(); });
   }
 }
