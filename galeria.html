@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Galería</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#faf7f2; --ink:#3b3330; --gold:#b08d57; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font-family:'Cormorant Garamond', Georgia, serif; }
+  header { text-align:center; padding:24px 16px 8px; }
+  .names { font-style:italic; font-size:2.2rem; color:var(--gold); }
+  .count { opacity:.7; font-size:1.1rem; }
+  .actions { text-align:center; margin:8px 0 16px; }
+  a.btn, button.btn { font:inherit; font-size:1.1rem; font-weight:600; color:var(--gold); background:transparent; border:1.5px solid var(--gold);
+         border-radius:999px; padding:8px 18px; cursor:pointer; text-decoration:none; margin:0 4px; display:inline-block; }
+  button.solid { background:var(--gold); color:#fff; }
+  #login { max-width:340px; margin:18vh auto; text-align:center; padding:0 20px; }
+  #login input { width:100%; font:inherit; font-size:1.3rem; padding:12px; margin:14px 0; border:1.5px solid var(--gold); border-radius:12px; text-align:center; background:#fff; }
+  #msg { color:#a2402f; min-height:1.4em; }
+  #grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:6px; padding:6px; max-width:1100px; margin:0 auto; }
+  #grid .cell { aspect-ratio:1; background:#e8dfd0; overflow:hidden; cursor:pointer; border-radius:4px; }
+  #grid img { width:100%; height:100%; object-fit:cover; display:block; }
+  /* lightbox */
+  #lb { position:fixed; inset:0; background:rgba(20,15,12,.94); display:none; align-items:center; justify-content:center; flex-direction:column; z-index:10; }
+  #lb img { max-width:96vw; max-height:80vh; object-fit:contain; }
+  #lb .bar { margin-top:14px; }
+  #lb .loading { color:#fff; font-size:1.3rem; }
+  /* pantalla en vivo */
+  body.show { background:#14100d; color:#f3ead9; overflow:hidden; }
+  #stage { position:fixed; inset:0; }
+  #stage img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; opacity:0; transition:opacity 1.2s ease; }
+  #stage img.on { opacity:1; }
+  #title { position:fixed; left:0; right:0; bottom:18px; text-align:center; font-style:italic; font-size:2rem; color:#d9b87a; text-shadow:0 2px 8px #000; z-index:2; }
+  #wait { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; text-align:center; font-size:2rem; font-style:italic; color:#d9b87a; padding:20px; }
+  #fs { position:fixed; top:10px; right:10px; z-index:3; opacity:.35; }
+  #fs:hover { opacity:1; }
+</style>
+</head>
+<body>
+
+<div id="login">
+  <div class="names" id="loginNames"></div>
+  <p>Escribe el PIN para ver las fotos</p>
+  <input id="pin" type="password" autocomplete="off" placeholder="PIN">
+  <button class="btn solid" id="enter">Entrar</button>
+  <div id="msg"></div>
+</div>
+
+<div id="app" style="display:none">
+  <header>
+    <div class="names" id="names"></div>
+    <div class="count" id="count"></div>
+  </header>
+  <div class="actions">
+    <button class="btn" id="refresh">Actualizar</button>
+    <a class="btn" id="toShow" href="#">Pantalla en vivo</a>
+  </div>
+  <div id="grid"></div>
+</div>
+
+<div id="lb">
+  <div class="loading" id="lbLoading">Cargando…</div>
+  <img id="lbImg" alt="" style="display:none">
+  <div class="bar">
+    <a class="btn" id="lbDl" download="foto.jpg" href="#">Descargar</a>
+    <button class="btn" id="lbClose">Cerrar</button>
+  </div>
+</div>
+
+<div id="showView" style="display:none">
+  <div id="stage"><img id="a"><img id="b"></div>
+  <div id="wait">Las fotos aparecerán aquí en cuanto las suban 📷</div>
+  <div id="title"></div>
+  <button class="btn" id="fs">Pantalla completa</button>
+</div>
+
+<script>
+/* ====== CONFIGURACIÓN ====== */
+const CONFIG = {
+  names: "Posada Navideña",
+  scriptUrl: "https://script.google.com/macros/s/AKfycbwzkmPdMk93oYB94Ai9P1FRybSsrxcGNTZVMhPUiiNTpEc3eRAcdZbpHuDDBDLe2Nqn/exec",
+  slideSeconds: 8,        // segundos por foto en la pantalla en vivo
+  pollSeconds: 20         // cada cuánto busca fotos nuevas en la pantalla en vivo
+};
+/* =========================== */
+
+const $ = id => document.getElementById(id);
+const isShow = new URLSearchParams(location.search).get('modo') === 'pantalla';
+let PIN = '';
+try { PIN = sessionStorage.getItem('pin') || ''; } catch (e) {}
+
+$('loginNames').textContent = CONFIG.names;
+$('names').textContent = CONFIG.names;
+$('title').textContent = CONFIG.names;
+$('toShow').href = '?modo=pantalla';
+
+async function api(params) {
+  const q = new URLSearchParams({ ...params, pin: PIN });
+  const res = await fetch(CONFIG.scriptUrl + '?' + q.toString());
+  const out = await res.json();
+  if (!out.ok) throw new Error(out.error || 'Error');
+  return out;
+}
+function dataToUrl(out) {
+  const bin = atob(out.data), arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return URL.createObjectURL(new Blob([arr], { type: out.mime || 'image/jpeg' }));
+}
+
+async function login() {
+  PIN = $('pin').value.trim() || PIN;
+  $('msg').textContent = '';
+  try {
+    const out = await api({ action: 'list' });
+    try { sessionStorage.setItem('pin', PIN); } catch (e) {}
+    $('login').style.display = 'none';
+    isShow ? startShow(out.files) : startGallery(out.files);
+  } catch (e) {
+    $('msg').textContent = e.message === 'PIN incorrecto' ? 'PIN incorrecto' : 'No se pudo conectar. Inténtalo de nuevo.';
+  }
+}
+$('enter').onclick = login;
+$('pin').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
+if (PIN) login();
+
+/* ---------- Galería ---------- */
+const thumbs = new Map();   // id -> url
+const rendered = new Set();
+let queue = [], active = 0;
+
+function startGallery(files) {
+  $('app').style.display = 'block';
+  renderGrid(files);
+  $('refresh').onclick = async () => { try { renderGrid((await api({ action: 'list' })).files); } catch (e) {} };
+}
+function renderGrid(files) {
+  $('count').textContent = files.length === 1 ? '1 foto' : files.length + ' fotos';
+  const grid = $('grid');
+  files.forEach(f => {
+    if (rendered.has(f.id)) return;
+    rendered.add(f.id);
+    const cell = document.createElement('div'); cell.className = 'cell'; cell.dataset.id = f.id;
+    const img = document.createElement('img'); cell.appendChild(img);
+    cell.onclick = () => openLightbox(f.id);
+    grid.appendChild(cell);   // las nuevas se agregan al final; el orden inicial ya es de más nueva a más vieja
+    queue.push({ id: f.id, img });
+  });
+  pump();
+}
+function pump() {
+  while (active < 3 && queue.length) {
+    const job = queue.shift(); active++;
+    api({ action: 'img', id: job.id, size: 'thumb' })
+      .then(out => { const u = dataToUrl(out); thumbs.set(job.id, u); job.img.src = u; })
+      .catch(() => {})
+      .finally(() => { active--; pump(); });
+  }
+}
+let lbUrl = null;
+async function openLightbox(id) {
+  $('lb').style.display = 'flex';
+  $('lbImg').style.display = 'none'; $('lbLoading').style.display = 'block';
+  try {
+    const out = await api({ action: 'img', id });
+    if (lbUrl) URL.revokeObjectURL(lbUrl);
+    lbUrl = dataToUrl(out);
+    $('lbImg').src = lbUrl; $('lbDl').href = lbUrl; $('lbDl').download = 'foto-' + id.slice(0, 6) + '.jpg';
+    $('lbImg').style.display = 'block'; $('lbLoading').style.display = 'none';
+  } catch (e) { $('lbLoading').textContent = 'No se pudo cargar la foto'; }
+}
+$('lbClose').onclick = () => { $('lb').style.display = 'none'; $('lbLoading').textContent = 'Cargando…'; };
+
+/* ---------- Pantalla en vivo ---------- */
+function shuffle(a) { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+
+function startShow(files) {
+  document.body.classList.add('show');
+  $('showView').style.display = 'block';
+  $('fs').onclick = () => { (document.documentElement.requestFullscreen || (()=>{})).call(document.documentElement); };
+  const known = new Set(), cache = new Map();
+  let all = [], q = [], front = $('a'), back = $('b'), running = false;
+
+  function ingest(list) {
+    const fresh = list.filter(f => !known.has(f.id));
+    fresh.forEach(f => known.add(f.id));
+    all = list.map(f => f.id);
+    if (!fresh.length) return;
+    const ids = fresh.map(f => f.id);
+    if (q.length === 0 && !running && known.size === ids.length) q = shuffle(ids);  // primera carga
+    else q = ids.concat(q);                                                           // nuevas: pasan al frente
+    if (!running) loop();
+  }
+  async function getUrl(id) {
+    if (cache.has(id)) return cache.get(id);
+    const p = api({ action: 'img', id }).then(dataToUrl);
+    cache.set(id, p);
+    p.catch(() => cache.delete(id));
+    return p;
+  }
+  function next() {
+    if (!q.length) q = shuffle(all);
+    return q.shift();
+  }
+  async function loop() {
+    running = true;
+    let id = next();
+    while (true) {
+      if (!id) { await new Promise(r => setTimeout(r, 2000)); id = next(); continue; }
+      let url;
+      try { url = await getUrl(id); } catch (e) { id = next(); await new Promise(r => setTimeout(r, 1000)); continue; }
+      $('wait').style.display = 'none';
+      back.src = url; await back.decode().catch(() => {});
+      back.classList.add('on'); front.classList.remove('on');
+      [front, back] = [back, front];
+      const nid = next();                           // precarga la siguiente mientras se ve esta
+      if (nid) getUrl(nid).catch(() => {});
+      await new Promise(r => setTimeout(r, CONFIG.slideSeconds * 1000));
+      // libera memoria de fotos ya mostradas
+      cache.get(id)?.then(u => { if (id !== nid) { URL.revokeObjectURL(u); cache.delete(id); } }).catch(() => {});
+      id = nid;
+    }
+  }
+  ingest(files);
+  setInterval(async () => { try { ingest((await api({ action: 'list' })).files); } catch (e) {} }, CONFIG.pollSeconds * 1000);
+}
+</script>
+</body>
+</html>
