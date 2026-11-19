@@ -220,7 +220,7 @@ function startShow(files) {
       let url;
       try { url = await getUrl(id); } catch (e) { id = next(); await new Promise(r => setTimeout(r, 1000)); continue; }
       $('wait').style.display = 'none';
-      back.src = url; await back.decode().catch(() => {});
+      back.src = url; await Promise.race([back.decode().catch(() => {}), new Promise(r => setTimeout(r, 1500))]);
       back.classList.add('on'); front.classList.remove('on');
       [front, back] = [back, front];
       const nid = next();                           // precarga la siguiente mientras se ve esta
