@@ -35,8 +35,11 @@
   #stage img.on { opacity:1; }
   #title { position:fixed; left:0; right:0; bottom:18px; text-align:center; font-style:italic; font-size:2rem; color:#d9b87a; text-shadow:0 2px 8px #000; z-index:2; }
   #wait { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; text-align:center; font-size:2rem; font-style:italic; color:#d9b87a; padding:20px; }
-  #fs { position:fixed; top:10px; right:10px; z-index:3; opacity:.35; }
-  #fs:hover { opacity:1; }
+  #ctrl { position:fixed; top:12px; right:12px; z-index:3; display:flex; gap:8px; transition:opacity .4s; }
+  #ctrl.hide { opacity:0; }
+  #ctrl .btn { background:rgba(20,16,13,.78); color:#f0d9a8; border-color:#d9b87a; font-size:1.05rem; }
+  #toast { position:fixed; left:50%; transform:translateX(-50%); top:64px; z-index:4; display:none; max-width:90vw; text-align:center;
+           background:rgba(20,16,13,.92); color:#f3ead9; padding:10px 16px; border-radius:12px; font-size:1.1rem; }
 </style>
 </head>
 <body>
@@ -74,7 +77,8 @@
   <div id="stage"><img id="a"><img id="b"></div>
   <div id="wait">Las fotos aparecerán aquí en cuanto las suban 📷</div>
   <div id="title"></div>
-  <button class="btn" id="fs">Pantalla completa</button>
+  <div id="ctrl"><a class="btn" id="back" href="#">← Galería</a><button class="btn" id="fs">Pantalla completa</button></div>
+  <div id="toast"></div>
 </div>
 
 <script>
@@ -187,7 +191,20 @@ function shuffle(a) { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { co
 function startShow(files) {
   document.body.classList.add('show');
   $('showView').style.display = 'block';
-  $('fs').onclick = () => { (document.documentElement.requestFullscreen || (()=>{})).call(document.documentElement); };
+  $('back').href = location.pathname;
+  let hideT;
+  function showCtrl() { $('ctrl').classList.remove('hide'); clearTimeout(hideT); hideT = setTimeout(() => $('ctrl').classList.add('hide'), 4000); }
+  ['mousemove', 'touchstart', 'keydown', 'click'].forEach(ev => document.addEventListener(ev, showCtrl));
+  showCtrl();
+  function toast(msg) { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; setTimeout(() => { t.style.display = 'none'; }, 6000); }
+  $('fs').onclick = async () => {
+    const d = document.documentElement;
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else if (document.fullscreenEnabled === false || !d.requestFullscreen) throw new Error('no');
+      else await d.requestFullscreen();
+    } catch (e) { toast('Aquí no se puede pantalla completa. Abre esta página en Chrome y presiona F11.'); }
+  };
   const known = new Set(), cache = new Map();
   let all = [], q = [], front = $('a'), back = $('b'), running = false;
 
