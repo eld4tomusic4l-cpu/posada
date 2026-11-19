@@ -99,10 +99,18 @@ $('toShow').href = '?modo=pantalla';
 
 async function api(params) {
   const q = new URLSearchParams({ ...params, pin: PIN });
-  const res = await fetch(CONFIG.scriptUrl + '?' + q.toString());
-  const out = await res.json();
-  if (!out.ok) throw new Error(out.error || 'Error');
-  return out;
+  let last;
+  for (let i = 0; i < 4; i++) {
+    try {
+      const res = await fetch(CONFIG.scriptUrl + '?' + q.toString());
+      const out = await res.json();
+      if (out.ok) return out;
+      last = new Error(out.error || 'Error');
+      if (out.error === 'PIN incorrecto') throw last;
+    } catch (e) { last = e; if (e.message === 'PIN incorrecto') throw e; }
+    await new Promise(r => setTimeout(r, 1200 * (i + 1)));
+  }
+  throw last;
 }
 function dataToUrl(out) {
   const bin = atob(out.data), arr = new Uint8Array(bin.length);
@@ -151,7 +159,7 @@ function renderGrid(files) {
   pump();
 }
 function pump() {
-  while (active < 3 && queue.length) {
+  while (active < 2 && queue.length) {
     const job = queue.shift(); active++;
     api({ action: 'img', id: job.id, size: 'thumb' })
       .then(out => { const u = dataToUrl(out); thumbs.set(job.id, u); job.img.src = u; })
